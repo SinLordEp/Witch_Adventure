@@ -1,0 +1,82 @@
+# Builds Witch Adventure for Linux and Windows with GameCI.
+# Required repository secrets: UNITY_EMAIL, UNITY_PASSWORD, UNITY_LICENSE (contents of Unity_lic.ulf).
+# The Unity version is read from ProjectSettings/ProjectVersion.txt.
+name: Build
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build ${{ matrix.targetPlatform }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - targetPlatform: StandaloneLinux64
+            artifactSuffix: linux-x64
+          - targetPlatform: StandaloneWindows64
+            artifactSuffix: windows-x64
+
+    steps:
+      - name: Free disk space for the Unity image
+        uses: jlumbroso/free-disk-space@v1.3.1
+        with:
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: false
+          tool-cache: false
+          swap-storage: false
+
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # semantic versioning reads tags and commit count
+          lfs: false
+
+      - name: Restore Unity Library cache
+        uses: actions/cache@v4
+        with:
+          path: Library
+          key: Library-${{ matrix.targetPlatform }}-${{ hashFiles('Assets/**', 'Packages/**', 'ProjectSettings/**') }}
+          restore-keys: |
+            Library-${{ matrix.targetPlatform }}-
+
+      - name: Build with Unity
+        id: unity
+        uses: game-ci/unity-builder@v4
+        env:
+          UNITY_EMAIL: ${{ secrets.UNITY_EMAIL }}
+          UNITY_PASSWORD: ${{ secrets.UNITY_PASSWORD }}
+          UNITY_LICENSE: ${{ secrets.UNITY_LICENSE }}
+        with:
+          targetPlatform: ${{ matrix.targetPlatform }}
+          buildName: WitchAdventure
+
+      # A tarball keeps the Linux executable bit, which a plain artifact upload drops.
+      - name: Package build
+        run: |
+          name="WitchAdventure-${{ steps.unity.outputs.buildVersion }}-${{ matrix.artifactSuffix }}"
+          tar -C "build/${{ matrix.targetPlatform }}" -czf "$name.tar.gz" .
+          echo "PACKAGE_NAME=$name" >> "$GITHUB_ENV"
+
+      - name: Upload build
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.PACKAGE_NAME }}
+          path: ${{ env.PACKAGE_NAME }}.tar.gz
+          if-no-files-found: error
+          retention-days: 30
